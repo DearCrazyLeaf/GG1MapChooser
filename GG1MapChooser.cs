@@ -1941,6 +1941,7 @@ public class MapChooser : BasePlugin, IPluginConfig<MCConfig>
         else if (@event.Text.StartsWith("nominate"))
         {
             Nominate(player, @event.Text);
+
         }
         else if (@event.Text.StartsWith("nextmap"))
         {
@@ -1979,7 +1980,8 @@ public class MapChooser : BasePlugin, IPluginConfig<MCConfig>
         //*********************** add message if both are not set ************************************
     }
 
-    [ConsoleCommand("yd", "yd")]
+    [ConsoleCommand("yd", "Yd")]
+    [ConsoleCommand("nominate", "Nominate")]
     [CommandHelper(whoCanExecute: CommandUsage.CLIENT_ONLY)]
     public void NominateCommand(CCSPlayerController caller, CommandInfo command)
     {
