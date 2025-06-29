@@ -1978,6 +1978,10 @@ public class MapChooser : BasePlugin, IPluginConfig<MCConfig>
         {
             RtvCommand(player, null!);
         }
+        else if (@event.Text.StartsWith("yd"))
+        {
+            Nominate(player, @event.Text);
+        }
         else if (@event.Text.StartsWith("nominate"))
         {
             Nominate(player, @event.Text);
@@ -2019,7 +2023,7 @@ public class MapChooser : BasePlugin, IPluginConfig<MCConfig>
         //*********************** add message if both are not set ************************************
     }
 
-    [ConsoleCommand("nominate", "Nominate")]
+    [ConsoleCommand("yd", "Nominate")]
     [CommandHelper(whoCanExecute: CommandUsage.CLIENT_ONLY)]
     public void NominateCommand(CCSPlayerController caller, CommandInfo command)
     {
