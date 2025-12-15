@@ -129,6 +129,8 @@ public class MapChooser : BasePlugin, IPluginConfig<MCConfig>
     private string? _selectedMap;
     private string? _roundEndMap;
     private List<string> _playedMaps = new List<string>();
+    private List<string> _recentlyNominatedMaps = new List<string>();
+    private int _extendMapCount = 0; // 记录地图已被延长的次数
     public string MapToChange = "";
     private readonly object _timerLock = new object();
     public CCSGameRules? gameRules;
@@ -401,18 +403,36 @@ public class MapChooser : BasePlugin, IPluginConfig<MCConfig>
 
             if (Config.VoteSettings.RememberPlayedMaps > 0)
             {
-                if (!_playedMaps.Contains(name.ToLower()))
+                // 尝试查找地图在 Maps_from_List 中的实际 key
+                string playedMapKey = name.ToLower();
+                foreach (var mapEntry in Maps_from_List)
+                {
+                    if (string.Equals(mapEntry.Key, name, StringComparison.OrdinalIgnoreCase))
+                    {
+                        playedMapKey = mapEntry.Key.ToLower();
+                        break;
+                    }
+                }
+
+                if (!_playedMaps.Contains(playedMapKey))
                 {
                     if (_playedMaps.Count > 0 && _playedMaps.Count >= Config.VoteSettings.RememberPlayedMaps)
                     {
                         _playedMaps.RemoveAt(0);
                     }
-                    _playedMaps.Add(name.ToLower());
+                    _playedMaps.Add(playedMapKey);
                 }
 
                 string excludedMaps = string.Join(", ", _playedMaps);
 
                 Logger.LogInformation($"Played maps: {excludedMaps}");
+            }
+
+            // 记录最近提名的地图冷却列表
+            if (Config.VoteSettings.RememberNominatedMaps > 0)
+            {
+                string recentNominated = string.Join(", ", _recentlyNominatedMaps);
+                Logger.LogInformation($"Recently nominated maps (cooldown): {recentNominated}");
             }
 
             if (Config.OtherSettings.RandomMapOnStart && !mapChangedOnStart && changeRequested == null)
@@ -978,6 +998,8 @@ public class MapChooser : BasePlugin, IPluginConfig<MCConfig>
         } */
     private void ExtendMap()
     {
+        _extendMapCount++;
+
         PrintToServerCenter("extend.win");
         PrintToServerChat("extend.win");
         var mp_timelimit = ConVar.Find("mp_timelimit");
@@ -1108,22 +1130,52 @@ public class MapChooser : BasePlugin, IPluginConfig<MCConfig>
         //  create map list to chose
         foreach (var mapcheck in Maps_from_List)
         {
-            if ((mapcheck.Value.MinPlayers != 0 && numplayers < mapcheck.Value.MinPlayers) || (mapcheck.Value.MaxPlayers != 0 && numplayers > mapcheck.Value.MaxPlayers))
+            bool isInCooldown = Config.VoteSettings.RememberNominatedMaps > 0 && _recentlyNominatedMaps.Contains(mapcheck.Key.ToLower());
+            bool isPlayersInvalid = (mapcheck.Value.MinPlayers != 0 && numplayers < mapcheck.Value.MinPlayers) || (mapcheck.Value.MaxPlayers != 0 && numplayers > mapcheck.Value.MaxPlayers);
+            bool isPlayed = _playedMaps.Contains(mapcheck.Key.ToLower());
+            // 检查是否是当前玩家自己预定的地图
+            bool isPlayerNominated = players[playerController.Slot] != null &&
+                players[playerController.Slot].ProposedMaps == mapcheck.Key;
+
+            if (isPlayersInvalid || isPlayed)
             {
-                playersvalid = false; //сначала маркируем карту проходит ли она по кол-ву игроков
+                playersvalid = false;
             }
-            if (limits && (_playedMaps.Contains(mapcheck.Key.ToLower()) || !playersvalid || IsNominated(mapcheck.Key))) //если включены лимиты и карта либо не валидна по списку 
-            {                                              // карт, которые уже были, либо по кол-ву игроков или номинирована - исключаем
-                playersvalid = true;
-                continue;
-            }
+
+            // 跳过已选择的地图
             if (haveSelectedMaps && selectedMapList.Contains(mapcheck.Key))
                 continue;
+
             if (mapcheck.Value.Display.Length > 0)
                 displayName = mapcheck.Value.Display;
             else
                 displayName = mapcheck.Key;
-            if (!playersvalid || _playedMaps.Contains(mapcheck.Key.ToLower()))
+
+            // 处理在冷却中的地图（显示为不可选）
+            if (isInCooldown)
+            {
+                MapsMenu.AddMenuOption(displayName + Localizer["map.cooldown"], (p, o) => { }, true); // disabled
+                menuSize++;
+                continue;
+            }
+
+            // 处理当前玩家自己预定的地图（显示为不可选）
+            if (limits && isPlayerNominated)
+            {
+                MapsMenu.AddMenuOption(displayName + Localizer["map.nominated.suffix"], (p, o) => { }, true); // disabled
+                menuSize++;
+                continue;
+            }
+
+            // 处理不满足条件的地图（根据 limits 参数决定是跳过还是显示）
+            if (limits && (!playersvalid || isPlayed))
+            {
+                playersvalid = true;
+                continue;
+            }
+
+            // 正常地图
+            if (!playersvalid || isPlayed)
             {
                 MapsMenu.AddMenuOption(displayName + " (!)", action);
             }
@@ -1175,18 +1227,23 @@ public class MapChooser : BasePlugin, IPluginConfig<MCConfig>
         int numplayers = GetRealClientCount(false);
         bool playersvalid = true;
         if (numplayers == 0) numplayers = 1;
+
         //  create map list to chose
         foreach (var mapcheck in Maps_from_List)
         {
-            if ((mapcheck.Value.MinPlayers != 0 && numplayers < mapcheck.Value.MinPlayers) || (mapcheck.Value.MaxPlayers != 0 && numplayers > mapcheck.Value.MaxPlayers))
+            bool isInCooldown = Config.VoteSettings.RememberNominatedMaps > 0 && _recentlyNominatedMaps.Contains(mapcheck.Key.ToLower());
+            bool isPlayersInvalid = (mapcheck.Value.MinPlayers != 0 && numplayers < mapcheck.Value.MinPlayers) || (mapcheck.Value.MaxPlayers != 0 && numplayers > mapcheck.Value.MaxPlayers);
+            bool isPlayed = _playedMaps.Contains(mapcheck.Key.ToLower());
+            // 检查是否是当前玩家自己预定的地图
+            bool isPlayerNominated = players[playerController.Slot] != null &&
+                players[playerController.Slot].ProposedMaps == mapcheck.Key;
+
+            if (isPlayersInvalid || isPlayed)
             {
-                playersvalid = false; //сначала маркируем карту проходит ли она по кол-ву игроков
+                playersvalid = false;
             }
-            if (limits && (_playedMaps.Contains(mapcheck.Key.ToLower()) || !playersvalid || IsNominated(mapcheck.Key))) //если включены лимиты и карта либо не валидна по списку 
-            {                                              // карт, которые уже были, либо по кол-ву игроков или номинирована - исключаем
-                playersvalid = true;
-                continue;
-            }
+
+            // 跳过已选择的地图
             if (haveSelectedMaps && selectedMapList.Contains(mapcheck.Key))
                 continue;
 
@@ -1194,7 +1251,40 @@ public class MapChooser : BasePlugin, IPluginConfig<MCConfig>
                 displayName = mapcheck.Value.Display;
             else
                 displayName = mapcheck.Key;
-            if (!playersvalid || _playedMaps.Contains(mapcheck.Key.ToLower()))
+
+            // 处理在冷却中的地图（显示为不可选）
+            if (isInCooldown)
+            {
+                using (new WithTemporaryCulture(playerController.GetLanguage()))
+                {
+                    MapsMenu.Add(displayName + _localizer["map.cooldown"], (p, o) => { }); // 空回调，不可选
+                }
+                menuSize++;
+                playersvalid = true;
+                continue;
+            }
+
+            // 处理当前玩家自己预定的地图（显示为不可选）
+            if (limits && isPlayerNominated)
+            {
+                using (new WithTemporaryCulture(playerController.GetLanguage()))
+                {
+                    MapsMenu.Add(displayName + _localizer["map.nominated.suffix"], (p, o) => { }); // 空回调，不可选
+                }
+                menuSize++;
+                playersvalid = true;
+                continue;
+            }
+
+            // 处理不满足条件的地图（根据 limits 参数决定是跳过还是显示）
+            if (limits && (!playersvalid || isPlayed))
+            {
+                playersvalid = true;
+                continue;
+            }
+
+            // 正常地图
+            if (!playersvalid || isPlayed)
             {
                 MapsMenu.Add(displayName + " (!)", action);
             }
@@ -1205,6 +1295,7 @@ public class MapChooser : BasePlugin, IPluginConfig<MCConfig>
             playersvalid = true;
             menuSize++;
         }
+
         if (menuSize < 1)
         {
             Logger.LogInformation("[GGMC]: Could not create map menu, no valid maps available.");
@@ -1838,7 +1929,11 @@ public class MapChooser : BasePlugin, IPluginConfig<MCConfig>
             }
         }
 
-        if (Config.VoteSettings.ExtendMapInVote)
+        // 检查是否还可以延长地图（MaxExtendMapCount为0表示无限制）
+        bool canExtendMap = Config.VoteSettings.ExtendMapInVote &&
+            (Config.VoteSettings.MaxExtendMapCount == 0 || _extendMapCount < Config.VoteSettings.MaxExtendMapCount);
+
+        if (canExtendMap)
         {
             if (wasdmenu)
             {
@@ -2047,7 +2142,7 @@ public class MapChooser : BasePlugin, IPluginConfig<MCConfig>
         {
             RtvCommand(player, null!);
         }
-        else if (@event.Text.StartsWith("nominate"))
+        else if (@event.Text.StartsWith("nominate") || @event.Text.StartsWith("yd"))
         {
             Nominate(player, @event.Text);
         }
@@ -2097,7 +2192,60 @@ public class MapChooser : BasePlugin, IPluginConfig<MCConfig>
             Nominate(caller, command.GetCommandString);
         }
     }
+
     private void Nominate(CCSPlayerController player, string command)
+    {
+        if (IsValidPlayer(player) && canVote)
+        {
+            if (Config.VoteSettings.AllowNominate)
+            {
+                if (!string.IsNullOrEmpty(_roundEndMap))
+                {
+                    player.PrintToChat(Localizer["no.nomination"]);
+                    return;
+                }
+                if (nominatedMaps.Count < Config.VoteSettings.MapsInVote)
+                {
+                    string[] words = command.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                    if (words.Length > 1)
+                    {
+                        TryNominate(player, words[1]);
+                    }
+                    else
+                    {
+                        Logger.LogInformation($"{player.PlayerName} wants to nominate map");
+                        GGMCNominationMenu(player);
+                        //                if (GGMCNominationMenu (player) == Nominations.NotNow)
+                        //                    PrintToPlayerChat(player, "not.now");
+                    }
+                }
+                else
+                {
+                    PrintToPlayerChat(player, "nominated.enough");
+                }
+            }
+            else
+            {
+                PrintToPlayerChat(player, "nominate.notallowed");
+            }
+        }
+        else
+        {
+            PrintToPlayerChat(player, "no.nomination");
+        }
+    }
+
+    [ConsoleCommand("yd", "Nominate")]
+    [CommandHelper(whoCanExecute: CommandUsage.CLIENT_ONLY)]
+    public void YDCommand(CCSPlayerController caller, CommandInfo command)
+    {
+        if (IsValidPlayer(caller))
+        {
+            YD(caller, command.GetCommandString);
+        }
+    }
+
+    private void YD(CCSPlayerController player, string command)
     {
         if (IsValidPlayer(player) && canVote)
         {
@@ -2770,7 +2918,7 @@ public class MapChooser : BasePlugin, IPluginConfig<MCConfig>
             if (mapcheck.Key == map)
             {
                 found = true;
-                if ((mapcheck.Value.MinPlayers != 0 && numplayers < mapcheck.Value.MinPlayers) || (mapcheck.Value.MaxPlayers != 0 && numplayers > mapcheck.Value.MaxPlayers) || _playedMaps.Contains(mapcheck.Key.ToLower()))
+                if ((mapcheck.Value.MinPlayers != 0 && numplayers < mapcheck.Value.MinPlayers) || (mapcheck.Value.MaxPlayers != 0 && numplayers > mapcheck.Value.MaxPlayers) || _playedMaps.Contains(mapcheck.Key.ToLower()) || (Config.VoteSettings.RememberNominatedMaps > 0 && _recentlyNominatedMaps.Contains(mapcheck.Key.ToLower())))
                 {
                     break;
                 }
@@ -2860,6 +3008,25 @@ public class MapChooser : BasePlugin, IPluginConfig<MCConfig>
                     _ = webhookService.SendWebhookMessage(_selectedMap, GetDisplayName(_selectedMap));
                 }
 
+                // 保存被提名的地图到冷却列表
+                if (Config.VoteSettings.RememberNominatedMaps > 0 && nominatedMaps.Count > 0)
+                {
+                    foreach (var mapInVote in nominatedMaps)
+                    {
+                        string mapKeyLower = mapInVote.ToLower();
+                        if (!_recentlyNominatedMaps.Contains(mapKeyLower))
+                        {
+                            _recentlyNominatedMaps.Add(mapKeyLower);
+                        }
+                    }
+                    // 移除超出限制的旧记录
+                    while (_recentlyNominatedMaps.Count > Config.VoteSettings.RememberNominatedMaps)
+                    {
+                        _recentlyNominatedMaps.RemoveAt(0);
+                    }
+                    Logger.LogInformation($"Maps added to nomination cooldown after vote: {string.Join(", ", nominatedMaps)}");
+                }
+
                 IsVoteInProgress = false;
                 _roundEndMap = _selectedMap;
                 DoMapChange(_selectedMap, changeTime);
@@ -2923,6 +3090,7 @@ public class MapChooser : BasePlugin, IPluginConfig<MCConfig>
         _timeLimitVoteRoundStart = false;
         _timeLimitVoteRoundEnd = false;
         TimeLimitExtends = 0;
+        _extendMapCount = 0;
         timeLimitStartEventTime = DateTime.MinValue;
     }
     private static bool IsValidPlayer(CCSPlayerController? p)
@@ -3581,6 +3749,10 @@ public class VoteSettings
     [JsonPropertyName("RememberPlayedMaps")]
     public int RememberPlayedMaps { get; set; } = 3;
 
+    /* Number of maps to remember that were nominated, so they can't be nominated again for this number of maps. 0 = disabled */
+    [JsonPropertyName("RememberNominatedMaps")]
+    public int RememberNominatedMaps { get; set; } = 0;
+
     /* Number of maps in vote for players  */
     [JsonPropertyName("MapsInVote")]
     public int MapsInVote { get; set; } = 5;
@@ -3611,6 +3783,10 @@ public class VoteSettings
     /* time to Extend Map */
     [JsonPropertyName("ExtendMapTimeMinutes")]
     public int ExtendMapTimeMinutes { get; set; } = 10;
+
+    /* Maximum number of times the map can be extended. 0 = unlimited */
+    [JsonPropertyName("MaxExtendMapCount")]
+    public int MaxExtendMapCount { get; set; } = 0;
 
     /* Plugin will Change the Map after the vote which called by external plugin. */
     [JsonPropertyName("ChangeMapAfterVote")]
